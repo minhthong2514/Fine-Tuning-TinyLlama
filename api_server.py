@@ -5,7 +5,7 @@ from llama_cpp import Llama
 import uvicorn
 
 # --- CẤU HÌNH MODEL ---
-MODEL_PATH = "/home/minhthong/Desktop/chatbot/tinyllama_evn_final.gguf"
+MODEL_PATH = "/home/minhthong/Desktop/Chatbot/tinyllama_evn_final.gguf"
 llm = Llama(
     model_path=MODEL_PATH,
     n_ctx=2048,

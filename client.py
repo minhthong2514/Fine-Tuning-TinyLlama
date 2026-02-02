@@ -2,7 +2,7 @@ import requests
 import sys
 
 # THAY ĐỊA CHỈ IP DƯỚI ĐÂY BẰNG IP CỦA MÁY A (SERVER)
-SERVER_IP = "" 
+SERVER_IP = "172.31.8.130" 
 URL = f"http://{SERVER_IP}:8000/stream"
 
 print("=== Kết nối tới Chatbot EVN Server ===")
