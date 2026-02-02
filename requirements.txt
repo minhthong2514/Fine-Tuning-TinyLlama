@@ -1,5 +1,5 @@
-llama-cpp-python
-requests
-pydantic
-fastapi
-uvicorn
+transformers
+torch
+accelerate
+pymongo 
+dnspython
