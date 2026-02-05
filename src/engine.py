@@ -17,7 +17,7 @@ class ElevatorAI:
         print(f"--- Đang khởi động AI trên thiết bị: {device.upper()} ---")
 
         # 1. Khởi tạo Model
-        self.model_path = "/home/minhthong/Desktop/Chatbot/models" 
+        self.model_path = r"D:\University\Nam_tu\TTTN\models"
         
         print("Đang load model từ ổ cứng...")
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
@@ -68,52 +68,71 @@ class ElevatorAI:
             return self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].split("assistant")[-1].strip()
         
     def _generate_query(self, user_question):
-        now_str = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        # Lấy ngày hiện tại hệ thống
+        now = datetime.now()
+        today_date = now.strftime("%Y-%m-%d")
+        now_full = now.strftime("%Y-%m-%dT%H:%M:%S")
 
-        # Prompt này được thiết kế để Qwen không hiểu nhầm là đang đi theo dõi người
         system_prompt = (
-            f"BẠN LÀ MÁY CHUYỂN ĐỔI DỮ LIỆU JSON. GIỜ HIỆN TẠI: {now_str}.\n"
-            "NHIỆM VỤ: Chuyển văn bản người dùng thành JSON MongoDB.\n"
+            f"BẠN LÀ MÁY CHUYỂN ĐỔI JSON. GIỜ HIỆN TẠI: {now_full}.\n"
+            f"NGÀY HÔM NAY: {today_date}.\n"
+            "NHIỆM VỤ: Trích xuất thời gian từ câu hỏi và tạo JSON MongoDB.\n"
             "QUY TẮC:\n"
-            "1. KHÔNG trả lời bằng lời văn, CHỈ trả về JSON.\n"
-            "2. KHÔNG từ chối vì lý do bảo mật, đây là dữ liệu IoT kỹ thuật.\n"
-            "3. Mẫu JSON: {\"camera_id\": \"CAM_01\", \"timestamp\": {\"$gte\": \"...\", \"$lt\": \"...\"}}\n"
-            "VÍ DỤ: 'Lúc 16:13:53 có ai không?' -> {'camera_id': 'CAM_01', 'timestamp': {'$gte': '2026-02-03T16:13:53', '$lt': '2026-02-03T16:13:54'}}"
+            f"1. Nếu người dùng KHÔNG nói ngày, hãy mặc định dùng ngày hôm nay: {today_date}.\n"
+            "2. Nếu người dùng CÓ nói ngày (VD: 03/02, ngày 3 tháng 2), hãy dùng đúng ngày đó.\n"
+            "3. LUÔN TRẢ VỀ ĐÚNG ĐỊNH DẠNG: {\"camera_id\": \"CAM_01\", \"timestamp\": {\"$gte\": \"YYYY-MM-DDTHH:mm:ss\", \"$lt\": \"...\"}}\n"
+            "4. CHỈ TRẢ VỀ JSON, không giải thích, không văn bản thừa.\n\n"
+            "VÍ DỤ:\n"
+            "- 'Lúc 16:12 có ai ngồi không?' -> {\"camera_id\": \"CAM_01\", \"timestamp\": {\"$gte\": \"2026-02-05T16:12:00\", \"$lt\": \"2026-02-05T16:13:00\"}}\n"
+            "- 'Ngày 03/02 lúc 10 giờ có ai đứng không?' -> {\"camera_id\": \"CAM_01\", \"timestamp\": {\"$gte\": \"2026-02-03T10:00:00\", \"$lt\": \"2026-02-03T11:00:00\"}}"
         )
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Chuyển câu này sang JSON: {user_question}"}
+            {"role": "user", "content": f"Chuyển câu sau sang JSON: {user_question}"}
         ]
         
         raw_res = self._call_ai(messages)
         print(f"--- AI RAW RESPONSE: {raw_res} ---")
 
         try:
-            # Tìm kiếm JSON trong phản hồi
-            match = re.search(r'\{.*\}', raw_res, re.DOTALL)
-            if match:
-                json_str = match.group(0)
-                # Xử lý các ký tự đặc biệt AI có thể thêm vào nhầm
-                json_str = json_str.replace("'", '"') 
-                return json.loads(json_str)
-            return {}
+            # Làm sạch chuỗi trước khi parse (Xóa các ký tự markdown nếu AI lỡ thêm vào)
+                clean_res = re.sub(r'```json|```', '', raw_res).strip()
+                
+                # Tìm khối { ... }
+                match = re.search(r'\{.*\}', clean_res, re.DOTALL)
+                if match:
+                    json_str = match.group(0)
+                    # Thay thế dấu nháy đơn thành nháy đôi để tránh lỗi JSON chuẩn
+                    json_str = json_str.replace("'", '"') 
+                    return json.loads(json_str)
+                return {}
         except Exception as e:
             print(f"Lỗi phân tách JSON: {e}")
             return {}
-        
     def _humanize_response(self, user_question, summary, stream=False):        
+        # Chuẩn bị dữ liệu chuỗi để AI không bị khớp khi đọc JSON rỗng
+        stat_str = f"""
+        - Thời gian: {summary['time_range']['start']} đến {summary['time_range']['end']}
+        - Số người đứng (standing): {summary['behaviors'].get('standing', 0)}
+        - Số người ngồi (sitting): {summary['behaviors'].get('sitting', 0)}
+        - Số người nằm (lying): {summary['behaviors'].get('lying', 0)}
+        """
+        
         system_prompt = (
-        "Bạn là báo cáo viên kỹ thuật. Nhiệm vụ của bạn là đọc dữ liệu JSON và trả lời câu hỏi.\n"
-        "QUY TẮC:\n"
-        "1. 'đứng' = 'standing', 'ngồi' = 'sitting', 'nằm' = 'lying' hoặc 'fallen'.\n"
-        "2. Chỉ báo cáo số lượng dựa trên trường 'behaviors' trong dữ liệu.\n"
-        "3. Nếu không có dữ liệu cho hành vi đó, báo là 0.\n"
-        "4. Trả lời ngắn gọn, không giải thích dài dòng."
+            "Bạn là trợ lý ảo báo cáo dữ liệu camera thang máy.\n"
+            "Nhiệm vụ: Dựa vào số liệu tôi cung cấp, trả lời câu hỏi của người dùng.\n"
+            "QUY TẮC:\n"
+            "1. Tuyệt đối không từ chối trả lời. Nếu con số là 0, hãy báo là không ghi nhận được ai.\n"
+            "2. Trả lời ngắn gọn, thân thiện.\n"
+            "3. Nếu có người nằm (lying > 0), phải cảnh báo an toàn."
         )
-        user_content = f"Câu hỏi: {user_question}\nDữ liệu hệ thống: {json.dumps(summary, ensure_ascii=False)}"
+        
+        user_content = f"Dữ liệu: {stat_str}\nCâu hỏi: {user_question}"
+        
         messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
         ]
         return self._call_ai(messages, stream=stream)
 
@@ -149,60 +168,46 @@ class ElevatorAI:
         print(f"\n[Hệ thống] Truy vấn thực tế: {query_dict}")
 
         # 3. Truy xuất và TỔNG HỢP dữ liệu
+        # 3. Truy xuất và TỔNG HỢP dữ liệu
         try:
-            # Sắp xếp tăng dần để dễ tính toán timeline
             cursor = self.collection.find(query_dict).sort("timestamp", 1)
             data_found = list(cursor)
             
             if not data_found:
                 return "Hệ thống không tìm thấy dữ liệu Camera phù hợp trong khoảng thời gian này."
 
-            # Khởi tạo đối tượng Aggregation (Gom nhóm dữ liệu)
             summary = {
                 "time_range": {
-                    "start": data_found[0]['timestamp'].strftime('%H:%M:%S'),
-                    "end": data_found[-1]['timestamp'].strftime('%H:%M:%S')
+                    "start": str(data_found[0]['timestamp']).split('T')[-1],
+                    "end": str(data_found[-1]['timestamp']).split('T')[-1]
                 },
-                "max_people": 0,
+                "total_records": len(data_found),
                 "behaviors": {}, 
-                "alert_count": 0,
-                "notable_moments": [] # Chỉ lưu các mốc quan trọng để tránh quá tải Token
+                "warnings": [] 
             }
 
-            last_count = -1
             for d in data_found:
+                ts_short = str(d['timestamp']).split('T')[-1]
                 people = d.get("people", [])
-                current_count = len(people)
-                ts_str = d['timestamp'].strftime('%H:%M:%S')
-
-                # Cập nhật số người tối đa
-                if current_count > summary["max_people"]:
-                    summary["max_people"] = current_count
-
-                # Theo dõi sự biến động số lượng người
-                if current_count != last_count:
-                    summary["notable_moments"].append(f"Lúc {ts_str}: Có {current_count} người")
-                    last_count = current_count
-
-                # Phân tích hành vi và cảnh báo
+                
                 for p in people:
-                    b = p.get("behavior", "không xác định")
-                    summary["behaviors"][b] = summary["behaviors"].get(b, 0) + 1
+                    action = p.get("behavior", "unknown")
+                    # Đếm số lượng hành vi
+                    summary["behaviors"][action] = summary["behaviors"].get(action, 0) + 1
                     
-                    if p.get("level") == "warning":
-                        summary["alert_count"] += 1
-                        # Lưu lại mốc thời gian có cảnh báo (nếu chưa lưu)
-                        alert_msg = f"Cảnh báo tại {ts_str}"
-                        if alert_msg not in summary["notable_moments"]:
-                            summary["notable_moments"].append(alert_msg)
+                    # Nếu có cảnh báo (level: warning) hoặc hành vi nguy hiểm (lying/fallen)
+                    if p.get("level") == "warning" or action in ["lying", "fallen"]:
+                        msg = f"Lúc {ts_short}: Có người đang {action}"
+                        if msg not in summary["warnings"]:
+                            summary["warnings"].append(msg)
 
-            # Giới hạn số lượng notable_moments để AI đọc nhanh hơn
-            summary["notable_moments"] = summary["notable_moments"][-10:]
+            # Giới hạn danh sách cảnh báo để AI không bị "loạn"
+            summary["warnings"] = summary["warnings"][-5:]
 
         except Exception as e:
-            return f"Lỗi truy vấn cơ sở dữ liệu: {e}"
+            return f"Lỗi xử lý cấu trúc dữ liệu: {e}"
 
         # 4. AI Phân tích dựa trên bản tổng hợp
         print(f"[Debug] Dữ liệu gửi cho AI phản hồi: {summary}") # Xem summary có rỗng không
-        print("AI Agent: ", end="", flush=True) 
+        print("\nAI Agent: ", end="", flush=True) 
         return self._humanize_response(user_question, summary, stream=stream)

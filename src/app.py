@@ -23,4 +23,4 @@ async def ask_elevator(req: QueryRequest):
 
 if __name__ == "__main__":
     print("Khởi động Server tại cổng 8080...")
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8081)

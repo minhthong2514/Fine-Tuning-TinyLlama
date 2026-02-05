@@ -2,3 +2,4 @@ venv/
 *.gguf
 __pycache__
 models/
+docs/
