@@ -17,7 +17,7 @@ class ElevatorAI:
         print(f"--- Đang khởi động AI trên thiết bị: {device.upper()} ---")
 
         # 1. Khởi tạo Model
-        self.model_path = r"D:\University\Nam_tu\TTTN\models"
+        self.model_path = "/home/minhthong/Desktop/Chatbot/models"
         
         print("Đang load model từ ổ cứng...")
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
@@ -110,26 +110,42 @@ class ElevatorAI:
         except Exception as e:
             print(f"Lỗi phân tách JSON: {e}")
             return {}
-    def _humanize_response(self, user_question, summary, stream=False):        
-        # Chuẩn bị dữ liệu chuỗi để AI không bị khớp khi đọc JSON rỗng
-        stat_str = f"""
-        - Thời gian: {summary['time_range']['start']} đến {summary['time_range']['end']}
-        - Số người đứng (standing): {summary['behaviors'].get('standing', 0)}
-        - Số người ngồi (sitting): {summary['behaviors'].get('sitting', 0)}
-        - Số người nằm (lying): {summary['behaviors'].get('lying', 0)}
-        """
         
+    def _humanize_response(self, user_question, summary, stream=False):
+        total_warn = summary.get('total_warnings', 0)
+        start_time = summary['time_range']['start']
+        end_time = summary['time_range']['end']
+        warning_details = "\n".join([f"- {w}" for w in summary.get('warnings', [])])
+
+        # ÉP TRẠNG THÁI NGAY TRONG PYTHON
+        status_text = "CẢNH BÁO NGUY HIỂM" if total_warn > 0 else "AN TOÀN"
+        event_text = f"Phát hiện {total_warn} đối tượng có hành vi nằm bất thường (lying)" if total_warn > 0 else "Không có sự cố"
+        action_text = "YÊU CẦU KIỂM TRA CAMERA VÀ HIỆN TRƯỜNG NGAY LẬP TỨC!" if total_warn > 0 else "Tiếp tục giám sát."
+
         system_prompt = (
-            "Bạn là trợ lý ảo báo cáo dữ liệu camera thang máy.\n"
-            "Nhiệm vụ: Dựa vào số liệu tôi cung cấp, trả lời câu hỏi của người dùng.\n"
-            "QUY TẮC:\n"
-            "1. Tuyệt đối không từ chối trả lời. Nếu con số là 0, hãy báo là không ghi nhận được ai.\n"
-            "2. Trả lời ngắn gọn, thân thiện.\n"
-            "3. Nếu có người nằm (lying > 0), phải cảnh báo an toàn."
+            "BẠN LÀ MÁY PHÁT NGÔN CỦA HỆ THỐNG GIÁM SÁT AN NINH.\n"
+            "NHIỆM VỤ: Trình bày dữ liệu dưới đây thành báo cáo đúng định dạng.\n"
+            "QUY TẮC CỐT LÕI:\n"
+            "1. Tuyệt đối KHÔNG thay đổi kết quả 'Trạng thái' và 'Cụ thể sự cố' mà hệ thống đã cung cấp.\n"
+            "2. KHÔNG được phép kết luận 'An toàn' nếu hệ thống ghi nhận có hành vi 'lying'.\n"
+            "3. Không sử dụng từ 'nói dối' cho 'lying', phải dùng từ 'nằm bất thường'.\n"
+            "4. Định dạng báo cáo phải gồm 4 mục: [Trạng thái an ninh], [Cụ thể sự cố], [Mốc thời gian], [Kiểm tra khẩn cấp]."
         )
-        
-        user_content = f"Dữ liệu: {stat_str}\nCâu hỏi: {user_question}"
-        
+
+        # Cấu trúc lại User Content để AI không còn đường thoái thác
+        user_content = (
+            f"DỮ LIỆU ĐÃ XỬ LÝ:\n"
+            f"- TRẠNG THÁI: {status_text}\n"
+            f"- SỰ CỐ: {event_text}\n"
+            f"- CHI TIẾT THỜI GIAN: {start_time} đến {end_time}\n"
+            f"- DANH SÁCH ĐỐI TƯỢNG:\n{warning_details}\n\n"
+            f"Hãy trả lời câu hỏi '{user_question}' theo đúng 4 mục sau:\n"
+            f"1. [Trạng thái an ninh]: {status_text}\n"
+            f"2. [Cụ thể sự cố]: {event_text} trong khoảng thời gian {start_time} - {end_time}.\n"
+            f"3. [Mốc thời gian]: Liệt kê chính xác các mốc thời gian của từng đối tượng từ danh sách chi tiết.\n"
+            f"4. [Kiểm tra khẩn cấp]: {action_text}"
+        )
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content}
@@ -147,9 +163,7 @@ class ElevatorAI:
                 ts = raw_query['timestamp']
                 try:
                     if isinstance(ts, dict):
-                        # CHUYỂN ĐỔI: Chuyển về datetime rồi cộng 1 giây, sau đó chuyển lại String để khớp DB
                         start_dt = datetime.fromisoformat(str(ts.get('$gte')).replace('Z', ''))
-                        # Nếu AI trả về $lt, dùng $lt, nếu không có thì lấy $gte + 1s
                         end_val = ts.get('$lt') or ts.get('$gte')
                         end_dt = datetime.fromisoformat(str(end_val).replace('Z', '')) + timedelta(seconds=1)
                         
@@ -168,46 +182,86 @@ class ElevatorAI:
         print(f"\n[Hệ thống] Truy vấn thực tế: {query_dict}")
 
         # 3. Truy xuất và TỔNG HỢP dữ liệu
-        # 3. Truy xuất và TỔNG HỢP dữ liệu
         try:
+            # Sắp xếp theo thời gian tăng dần để bắt được mốc "bắt đầu" chính xác nhất
             cursor = self.collection.find(query_dict).sort("timestamp", 1)
             data_found = list(cursor)
             
             if not data_found:
                 return "Hệ thống không tìm thấy dữ liệu Camera phù hợp trong khoảng thời gian này."
 
+            # Dictionary để quản lý đối tượng: { raw_id: {display_id, first_time, behavior} }
+            detected_objects = {}
+            person_counter = 0
+            last_event_time = None
+
             summary = {
                 "time_range": {
-                    "start": str(data_found[0]['timestamp']).split('T')[-1],
-                    "end": str(data_found[-1]['timestamp']).split('T')[-1]
+                    "start": str(data_found[0]['timestamp']).split('T')[-1].split('.')[0],
+                    "end": str(data_found[-1]['timestamp']).split('T')[-1].split('.')[0]
                 },
                 "total_records": len(data_found),
-                "behaviors": {}, 
                 "warnings": [] 
             }
 
             for d in data_found:
-                ts_short = str(d['timestamp']).split('T')[-1]
+                ts_short = str(d['timestamp']).split('T')[-1].split('.')[0] # Định dạng HH:mm:ss
                 people = d.get("people", [])
                 
                 for p in people:
                     action = p.get("behavior", "unknown")
-                    # Đếm số lượng hành vi
-                    summary["behaviors"][action] = summary["behaviors"].get(action, 0) + 1
+                    level = p.get("level", "normal")
+                    raw_id = p.get("object_id", p.get("id", "unknown"))
                     
-                    # Nếu có cảnh báo (level: warning) hoặc hành vi nguy hiểm (lying/fallen)
-                    if p.get("level") == "warning" or action in ["lying", "fallen"]:
-                        msg = f"Lúc {ts_short}: Có người đang {action}"
-                        if msg not in summary["warnings"]:
-                            summary["warnings"].append(msg)
+                    # Điều kiện xác định hành vi bất thường/nguy hiểm
+                    if action in ["lying", "fallen"] or level == "warning":
+                        
+                        # Logic xử lý cho đối tượng có ID là 'unknown'
+                        # Nếu ID unknown xuất hiện cách lần cuối > 10s, coi là người mới
+                        is_new_person = False
+                        if raw_id == "unknown":
+                            if last_event_time is None:
+                                is_new_person = True
+                            else:
+                                t1 = datetime.strptime(ts_short, "%H:%M:%S")
+                                t2 = datetime.strptime(last_event_time, "%H:%M:%S")
+                                if (t1 - t2).total_seconds() > 10:
+                                    is_new_person = True
+                            
+                            if is_new_person:
+                                # Tạo một ID tạm thời duy nhất cho 'unknown' này để lưu vào dict
+                                person_counter += 1
+                                current_temp_id = f"temp_idx_{person_counter}"
+                                detected_objects[current_temp_id] = {
+                                    "display_id": f"Person {person_counter:02d}",
+                                    "first_time": ts_short,
+                                    "action": action
+                                }
+                                last_event_time = ts_short
+                        
+                        # Logic xử lý cho đối tượng có ID cụ thể (không phải unknown)
+                        else:
+                            if raw_id not in detected_objects:
+                                person_counter += 1
+                                detected_objects[raw_id] = {
+                                    "display_id": f"Person {person_counter:02d}",
+                                    "first_time": ts_short,
+                                    "action": action
+                                }
+                                last_event_time = ts_short
 
-            # Giới hạn danh sách cảnh báo để AI không bị "loạn"
-            summary["warnings"] = summary["warnings"][-5:]
+            # Chuyển đổi dictionary thành danh sách chuỗi cảnh báo cho AI
+            actual_warnings = []
+            for info in detected_objects.values():
+                actual_warnings.append(f"{info['display_id']} phát hiện {info['action']} lúc {info['first_time']}")
+
+            summary["total_warnings"] = len(actual_warnings)
+            summary["warnings"] = actual_warnings
 
         except Exception as e:
             return f"Lỗi xử lý cấu trúc dữ liệu: {e}"
 
         # 4. AI Phân tích dựa trên bản tổng hợp
-        print(f"[Debug] Dữ liệu gửi cho AI phản hồi: {summary}") # Xem summary có rỗng không
-        print("\nAI Agent: ", end="", flush=True) 
+        print(f"[Debug] Dữ liệu gửi cho AI phản hồi: {summary}")
+        print("\nAI Agent: \n", end="", flush=True) 
         return self._humanize_response(user_question, summary, stream=stream)
